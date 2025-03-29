@@ -1,0 +1,188 @@
+diff --git a/.gitmodules b/.gitmodules
+new file mode 100644
+index 0000000000..4fd179f8eb
+--- /dev/null
++++ b/.gitmodules
+@@ -0,0 +1,6 @@
++[submodule "llvm/include/llvm/Transforms/Obfuscation"]
++	path = llvm/include/llvm/Transforms/Obfuscation
++	url = https://github.com/61bcdefg/Hikari-LLVM15-Headers.git
++[submodule "llvm/lib/Transforms/Obfuscation"]
++	path = llvm/lib/Transforms/Obfuscation
++	url = https://github.com/61bcdefg/Hikari-LLVM15-Core.git
+diff --git a/llvm/include/llvm/InitializePasses.h b/llvm/include/llvm/InitializePasses.h
+index 3db639a687..4fc67e3ac5 100755
+--- a/llvm/include/llvm/InitializePasses.h
++++ b/llvm/include/llvm/InitializePasses.h
+@@ -313,6 +313,7 @@ void initializeWasmEHPreparePass(PassRegistry&);
+ void initializeWinEHPreparePass(PassRegistry&);
+ void initializeWriteBitcodePassPass(PassRegistry&);
+ void initializeXRayInstrumentationPass(PassRegistry&);
++void initializeObfuscationPass(PassRegistry&);
+ 
+ } // end namespace llvm
+ 
+diff --git a/llvm/include/llvm/LinkAllPasses.h b/llvm/include/llvm/LinkAllPasses.h
+index fe7fedad18..b5d9eee398 100755
+--- a/llvm/include/llvm/LinkAllPasses.h
++++ b/llvm/include/llvm/LinkAllPasses.h
+@@ -45,6 +45,7 @@
+ #include "llvm/Transforms/Utils.h"
+ #include "llvm/Transforms/Utils/SymbolRewriter.h"
+ #include "llvm/Transforms/Vectorize/LoadStoreVectorizer.h"
++#include "llvm/Transforms/Obfuscation/Obfuscation.h"
+ #include <cstdlib>
+ 
+ namespace {
+@@ -138,6 +139,7 @@ namespace {
+       (void) llvm::createUnifyLoopExitsPass();
+       (void) llvm::createFixIrreduciblePass();
+       (void)llvm::createSelectOptimizePass();
++      (void)llvm::createObfuscationLegacyPass();
+ 
+       (void)new llvm::IntervalPartition();
+       (void)new llvm::ScalarEvolutionWrapperPass();
+diff --git a/llvm/include/llvm/Transforms/Obfuscation b/llvm/include/llvm/Transforms/Obfuscation
+new file mode 160000
+index 0000000000..d35b3f2782
+--- /dev/null
++++ b/llvm/include/llvm/Transforms/Obfuscation
+@@ -0,0 +1 @@
++Subproject commit d35b3f2782ee3ba676cb1c11a4ecc935f152aa2a
+diff --git a/llvm/lib/Passes/CMakeLists.txt b/llvm/lib/Passes/CMakeLists.txt
+index 98d2de76c0..75c6168886 100755
+--- a/llvm/lib/Passes/CMakeLists.txt
++++ b/llvm/lib/Passes/CMakeLists.txt
+@@ -31,4 +31,5 @@ add_llvm_component_library(LLVMPasses
+   TransformUtils
+   Vectorize
+   Instrumentation
++  Obfuscation
+   )
+diff --git a/llvm/lib/Passes/PassBuilderPipelines.cpp b/llvm/lib/Passes/PassBuilderPipelines.cpp
+index 6ede863829..e03ea64e1a 100755
+--- a/llvm/lib/Passes/PassBuilderPipelines.cpp
++++ b/llvm/lib/Passes/PassBuilderPipelines.cpp
+@@ -135,6 +135,7 @@
+ #include "llvm/Transforms/Vectorize/LoopVectorize.h"
+ #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
+ #include "llvm/Transforms/Vectorize/VectorCombine.h"
++#include "llvm/Transforms/Obfuscation/Obfuscation.h"
+ 
+ using namespace llvm;
+ 
+@@ -1521,6 +1522,9 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
+   if (PGOOpt && PGOOpt->PseudoProbeForProfiling &&
+       PGOOpt->Action == PGOOptions::SampleUse)
+     MPM.addPass(PseudoProbeUpdatePass());
++  
++  if (!LTOPreLink)
++    MPM.addPass(ObfuscationPass());
+ 
+   // Emit annotation remarks.
+   addAnnotationRemarksPass(MPM);
+@@ -1644,6 +1648,8 @@ ModulePassManager PassBuilder::buildThinLTODefaultPipeline(
+     // globals in the object file.
+     MPM.addPass(EliminateAvailableExternallyPass());
+     MPM.addPass(GlobalDCEPass());
++
++    MPM.addPass(ObfuscationPass());
+     return MPM;
+   }
+ 
+@@ -1654,6 +1660,8 @@ ModulePassManager PassBuilder::buildThinLTODefaultPipeline(
+   // Now add the optimization pipeline.
+   MPM.addPass(buildModuleOptimizationPipeline(
+       Level, ThinOrFullLTOPhase::ThinLTOPostLink));
++  
++  MPM.addPass(ObfuscationPass());
+ 
+   // Emit annotation remarks.
+   addAnnotationRemarksPass(MPM);
+@@ -1690,6 +1698,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
+ 
+     invokeFullLinkTimeOptimizationLastEPCallbacks(MPM, Level);
+ 
++    MPM.addPass(ObfuscationPass());
++
+     // Emit annotation remarks.
+     addAnnotationRemarksPass(MPM);
+ 
+@@ -1768,6 +1778,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
+ 
+     invokeFullLinkTimeOptimizationLastEPCallbacks(MPM, Level);
+ 
++    MPM.addPass(ObfuscationPass());
++
+     // Emit annotation remarks.
+     addAnnotationRemarksPass(MPM);
+ 
+@@ -1980,6 +1992,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
+ 
+   invokeFullLinkTimeOptimizationLastEPCallbacks(MPM, Level);
+ 
++  MPM.addPass(ObfuscationPass());
++
+   // Emit annotation remarks.
+   addAnnotationRemarksPass(MPM);
+ 
+@@ -2078,6 +2092,9 @@ ModulePassManager PassBuilder::buildO0DefaultPipeline(OptimizationLevel Level,
+ 
+   invokeOptimizerLastEPCallbacks(MPM, Level);
+ 
++  if (!LTOPreLink)
++    MPM.addPass(ObfuscationPass());
++
+   if (LTOPreLink)
+     addRequiredLTOPreLinkPasses(MPM);
+ 
+diff --git a/llvm/lib/Transforms/CMakeLists.txt b/llvm/lib/Transforms/CMakeLists.txt
+index 84a7e34147..7fd993bd56 100755
+--- a/llvm/lib/Transforms/CMakeLists.txt
++++ b/llvm/lib/Transforms/CMakeLists.txt
+@@ -10,3 +10,4 @@ add_subdirectory(ObjCARC)
+ add_subdirectory(Coroutines)
+ add_subdirectory(CFGuard)
+ add_subdirectory(HipStdPar)
++add_subdirectory(Obfuscation)
+diff --git a/llvm/lib/Transforms/Obfuscation b/llvm/lib/Transforms/Obfuscation
+new file mode 160000
+index 0000000000..309522bc73
+--- /dev/null
++++ b/llvm/lib/Transforms/Obfuscation
+@@ -0,0 +1 @@
++Subproject commit 309522bc7300d7e7f37821259908b445eff981ea
+diff --git a/llvm/tools/bugpoint/CMakeLists.txt b/llvm/tools/bugpoint/CMakeLists.txt
+index b0e71910c7..860cadfa99 100755
+--- a/llvm/tools/bugpoint/CMakeLists.txt
++++ b/llvm/tools/bugpoint/CMakeLists.txt
+@@ -21,6 +21,7 @@ set(LLVM_LINK_COMPONENTS
+   TargetParser
+   TransformUtils
+   Vectorize
++  Obfuscation
+   )
+ 
+ add_llvm_tool(bugpoint
+diff --git a/llvm/tools/xcode-toolchain/CMakeLists.txt b/llvm/tools/xcode-toolchain/CMakeLists.txt
+index 6167f5f6bd..cbfb0c2491 100755
+--- a/llvm/tools/xcode-toolchain/CMakeLists.txt
++++ b/llvm/tools/xcode-toolchain/CMakeLists.txt
+@@ -81,7 +81,7 @@ if(NOT toolchains_match)
+ endif()
+ set(toolchains_dir ${CMAKE_MATCH_1})
+ 
+-set(LLVMToolchainDir "${CMAKE_INSTALL_PREFIX}/Toolchains/LLVM${PACKAGE_VERSION}.xctoolchain/")
++set(LLVMToolchainDir "${CMAKE_INSTALL_PREFIX}/Toolchains/Hikari_LLVM${PACKAGE_VERSION}.xctoolchain/")
+ 
+ add_custom_command(OUTPUT ${LLVMToolchainDir}
+                     COMMAND ${CMAKE_COMMAND} -E make_directory ${LLVMToolchainDir})
+@@ -89,7 +89,7 @@ add_custom_command(OUTPUT ${LLVMToolchainDir}
+ add_custom_command(OUTPUT ${LLVMToolchainDir}/Info.plist
+                   DEPENDS ${LLVMToolchainDir}
+                   COMMAND ${CMAKE_COMMAND} -E remove ${LLVMToolchainDir}/Info.plist
+-                  COMMAND /usr/libexec/PlistBuddy -c "Add:CFBundleIdentifier string org.llvm.${PACKAGE_VERSION}" "${LLVMToolchainDir}/Info.plist"
++                  COMMAND /usr/libexec/PlistBuddy -c "Add:CFBundleIdentifier string hikari.llvm.${PACKAGE_VERSION}" "${LLVMToolchainDir}/Info.plist"
+                   COMMAND /usr/libexec/PlistBuddy -c "Add:CompatibilityVersion integer ${COMPAT_VERSION}" "${LLVMToolchainDir}/Info.plist"
+                   )
+ 
